@@ -7,7 +7,7 @@ The first prototype models a small evolving world with:
 - plants that grow according to light, rain, temperature, fertility, and local pressure;
 - herbivores that search for plants, flee predators, consume energy, and reproduce;
 - herbivores that can evolve defensive traits such as camouflage, armor, energy absorption, and herd behavior;
-- carnivores that hunt prey, compete, and mutate across generations;
+- carnivores that hunt prey, compete, can mutate toward cannibalism, and mutate across generations;
 - omnivores that can opportunistically eat plants or animals;
 - a tiny neural network per animal, inherited with mutation at reproduction;
 - changing climate cycles, storms, droughts, and seasonal variation;

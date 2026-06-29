@@ -204,7 +204,7 @@ class Animal {
     this.age = 0;
     this.generation = generation;
     this.brain = brain || new NeuralBrain();
-    this.defenseTraits = defenseTraits ? { ...defenseTraits } : createDefenseTraits(kind);
+    this.defenseTraits = normalizeDefenseTraits(kind, defenseTraits);
     this.birthTick = world.tick;
     this.parentId = lineage.length ? lineage[lineage.length - 1].id : null;
     this.mutationCount = 0;
@@ -219,8 +219,8 @@ class Animal {
     }];
     this.radius = profile.radius * randomBetween(0.9, 1.12);
     this.maxSpeed = profile.maxSpeed * randomBetween(0.88, 1.14) * (1 - this.defenseTraits.armor * 0.12);
-    this.metabolism = profile.metabolism * randomBetween(0.9, 1.2) * (1 + this.defenseTraits.armor * 0.16 + this.defenseTraits.camouflage * 0.06);
-    this.reproductionEnergy = profile.reproductionEnergy * randomBetween(0.92, 1.12);
+    this.metabolism = profile.metabolism * randomBetween(0.9, 1.2) * (1 + this.defenseTraits.armor * 0.16 + this.defenseTraits.camouflage * 0.06 + this.defenseTraits.cannibalism * 0.08);
+    this.reproductionEnergy = profile.reproductionEnergy * randomBetween(0.92, 1.12) * (1 + this.defenseTraits.cannibalism * 0.1);
     this.reproductionCooldown = randomBetween(120, 420);
     this.alive = true;
     this.lastMeal = 0;
@@ -283,14 +283,20 @@ class Animal {
     if (profile.prey.length && perception.prey && distance(this, perception.prey) < profile.attackRange + this.radius) {
       const prey = perception.prey;
       const defense = preyDefenseScore(prey);
-      const captureChance = clamp(0.84 - defense * 0.62, 0.12, 0.9);
+      const cannibalAttack = this.kind === 'carnivore' && prey.kind === 'carnivore';
+      const captureChance = cannibalAttack
+        ? clamp(0.46 + this.defenseTraits.cannibalism * 0.28 - defense * 0.22, 0.12, 0.68)
+        : clamp(0.84 - defense * 0.62, 0.12, 0.9);
       if (prey.alive && Math.random() < captureChance) {
         prey.die(false);
-        this.energy += profile.meatNutrition + prey.energy * 0.18;
+        this.energy += profile.meatNutrition * (cannibalAttack ? 0.78 : 1) + prey.energy * 0.18;
         this.lastMeal = 0;
         addParticle(this.x, this.y, profile.color);
       } else if (prey.alive) {
         prey.energy -= Math.max(0.2, prey.defenseTraits.armor * 0.8);
+        if (cannibalAttack) {
+          this.energy -= 7 + prey.energy * 0.04;
+        }
         prey.vx += randomBetween(-1.2, 1.2);
         prey.vy += randomBetween(-1.2, 1.2);
         addParticle(prey.x, prey.y, '#d8f3b5');
@@ -319,6 +325,9 @@ class Animal {
       if (child.kind === 'herbivore' && this.kind !== 'herbivore') {
         child.defenseTraits = createDefenseTraits('herbivore');
       }
+      if (child.kind === 'carnivore' && this.kind !== 'carnivore') {
+        child.defenseTraits = createDefenseTraits('carnivore');
+      }
     }
     child.lineage = child.lineage.concat({
       id: child.id,
@@ -340,29 +349,45 @@ class Animal {
 }
 
 function createDefenseTraits(kind) {
+  if (kind === 'carnivore') {
+    return { camouflage: 0, armor: 0, energyAbsorption: 0, gregariousness: 0, cannibalism: randomBetween(0.02, 0.18) };
+  }
   if (kind !== 'herbivore') {
-    return { camouflage: 0, armor: 0, energyAbsorption: 0, gregariousness: 0 };
+    return { camouflage: 0, armor: 0, energyAbsorption: 0, gregariousness: 0, cannibalism: 0 };
   }
   return {
     camouflage: randomBetween(0.08, 0.32),
     armor: randomBetween(0.04, 0.24),
     energyAbsorption: randomBetween(0.12, 0.38),
     gregariousness: randomBetween(0.1, 0.34),
+    cannibalism: 0,
   };
 }
 
 function mutateDefenseTraits(kind, traits, rate) {
-  const next = { ...traits };
+  const next = normalizeDefenseTraits(kind, traits);
   let mutationCount = 0;
-  if (kind !== 'herbivore') return { traits: next, mutationCount };
+  if (kind !== 'herbivore' && kind !== 'carnivore') return { traits: next, mutationCount };
 
-  for (const key of Object.keys(next)) {
+  const mutableTraits = kind === 'carnivore' ? ['cannibalism'] : ['camouflage', 'armor', 'energyAbsorption', 'gregariousness'];
+  for (const key of mutableTraits) {
     if (Math.random() < rate * 2.6) {
       next[key] = clamp(next[key] + gaussian() * 0.11, 0, 1);
       mutationCount += 1;
     }
   }
   return { traits: next, mutationCount };
+}
+
+function normalizeDefenseTraits(kind, traits = {}) {
+  const base = createDefenseTraits(kind);
+  return {
+    camouflage: traits.camouflage ?? base.camouflage,
+    armor: traits.armor ?? base.armor,
+    energyAbsorption: traits.energyAbsorption ?? base.energyAbsorption,
+    gregariousness: traits.gregariousness ?? base.gregariousness,
+    cannibalism: traits.cannibalism ?? base.cannibalism,
+  };
 }
 
 function preyVisibility(prey) {
@@ -419,8 +444,9 @@ function perceive(animal) {
   for (const other of world.animals) {
     if (other === animal || !other.alive) continue;
     const d = torusDistance(animal.x, animal.y, other.x, other.y);
-    const visibleDistance = profile.prey.includes(other.kind) ? d / preyVisibility(other) : d;
-    if (profile.prey.includes(other.kind) && visibleDistance < preyDistance) {
+    const canHunt = canHuntPrey(animal, other);
+    const visibleDistance = canHunt ? d / preyVisibility(other) : d;
+    if (canHunt && visibleDistance < preyDistance) {
       preyDistance = visibleDistance;
       nearestPrey = other;
     }
@@ -470,9 +496,24 @@ function perceive(animal) {
 function chooseFoodTarget(animal, plant, plantDistance, prey, preyDistance) {
   const profile = animalProfiles[animal.kind];
   const plantScore = plant ? (profile.plantNutrition / 30) * (1 - clamp(plantDistance / 300, 0, 1)) : -1;
-  const preyScore = prey ? (profile.meatNutrition / 80) * (1 - clamp(preyDistance / 320, 0, 1)) : -1;
+  let preyScore = prey ? (profile.meatNutrition / 80) * (1 - clamp(preyDistance / 320, 0, 1)) : -1;
+  if (prey && animal.kind === 'carnivore' && prey.kind === 'carnivore') {
+    preyScore *= cannibalDrive(animal);
+  }
   if (preyScore > plantScore) return { entity: prey, distance: preyDistance };
   return { entity: plant, distance: plantDistance };
+}
+
+function canHuntPrey(hunter, prey) {
+  const profile = animalProfiles[hunter.kind];
+  if (profile.prey.includes(prey.kind)) return true;
+  return hunter.kind === 'carnivore' && prey.kind === 'carnivore' && cannibalDrive(hunter) > 0.22;
+}
+
+function cannibalDrive(animal) {
+  if (animal.kind !== 'carnivore') return 0;
+  const hunger = clamp(1 - animal.energy / Math.max(1, animal.reproductionEnergy), 0, 1);
+  return clamp(animal.defenseTraits.cannibalism * (0.35 + hunger * 1.25), 0, 1);
 }
 
 function updateClimate() {
@@ -694,6 +735,16 @@ function drawAnimals() {
       ctx.stroke();
       ctx.restore();
     }
+    if (animal.kind === 'carnivore' && traits.cannibalism > 0.45) {
+      ctx.save();
+      ctx.translate(animal.x, animal.y);
+      ctx.strokeStyle = `rgba(180, 40, 58, ${0.18 + traits.cannibalism * 0.28})`;
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.arc(0, 0, 12 + traits.cannibalism * 16, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
     if (animal.id === world.selectedAnimalId) {
       ctx.save();
       ctx.translate(animal.x, animal.y);
@@ -820,6 +871,7 @@ function updateSelectionPanel() {
     selectedStat('Armure', traitPercent(animal.defenseTraits.armor)),
     selectedStat('Absorption', traitPercent(animal.defenseTraits.energyAbsorption)),
     selectedStat('Groupe', traitPercent(animal.defenseTraits.gregariousness)),
+    selectedStat('Cannibalisme', traitPercent(animal.defenseTraits.cannibalism)),
   ].join('');
   lineageListEl.innerHTML = animal.lineage.map((entry) => `
     <div class="lineage-item">

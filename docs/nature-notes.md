@@ -18,6 +18,10 @@ ADNeuroGaia is an exploratory simulation, not a biological model. This file capt
 - Horns, antlers, shells, toxins, speed bursts, and vigilance as separate heritable tradeoffs.
 - Predator counter-adaptation: better vision, ambush, endurance, or pack hunting.
 
+## Carnivore pressure traits
+
+- Cannibalism: carnivores can mutate toward eating other carnivores when hungry. It can help survival during prey scarcity, but attacks are risky and the trait carries metabolic and reproductive costs.
+
 ## Modeling rule
 
 Every new trait should have a benefit and a cost. If a trait is only beneficial, it will dominate too quickly and reduce evolutionary diversity.
