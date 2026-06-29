@@ -359,10 +359,22 @@ input:focus-visible {
   line-height: 1.25;
 }
 
-.genealogy-mutations {
-  color: var(--muted);
+.genealogy-state {
+  justify-self: end;
+  padding: 3px 6px;
+  border-radius: 999px;
   font-size: 12px;
-  text-align: right;
+  line-height: 1;
+}
+
+.genealogy-state.alive {
+  background: rgba(120, 208, 120, 0.16);
+  color: #9fe19f;
+}
+
+.genealogy-state.dead {
+  background: rgba(236, 106, 94, 0.14);
+  color: #ee8a80;
 }
 
 .genealogy-empty {

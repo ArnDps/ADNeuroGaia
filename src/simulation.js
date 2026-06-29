@@ -997,14 +997,15 @@ function renderGenealogyTree(record) {
 
 function genealogyButton(record, role) {
   const color = animalProfiles[record.kind]?.color || '#eef7ef';
-  const state = record.alive ? 'vivant' : `mort J${record.deathDay ?? '?'}`;
+  const state = record.alive ? 'Vivant' : `Mort J${record.deathDay ?? '?'}`;
+  const stateClass = record.alive ? 'alive' : 'dead';
   const active = role === 'current' ? ' active' : '';
   return `
     <button class="genealogy-node${active}" type="button" data-select-id="${record.id}">
       <strong>G${record.generation}</strong>
       <span class="lineage-kind" style="color: ${color}">${record.kind} #${record.id}</span>
-      <span class="genealogy-mutations">+${record.mutationCount}</span>
-      <small>${state} | ${traitDeltaSummary(record)}</small>
+      <span class="genealogy-state ${stateClass}">${state}</span>
+      <small>+${record.mutationCount} mutation(s) | ${traitDeltaSummary(record)}</small>
     </button>
   `;
 }
