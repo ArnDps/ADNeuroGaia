@@ -6,6 +6,7 @@ The first prototype models a small evolving world with:
 
 - plants that grow according to light, rain, temperature, fertility, and local pressure;
 - herbivores that search for plants, flee predators, consume energy, and reproduce;
+- herbivores that can evolve defensive traits such as camouflage, armor, energy absorption, and herd behavior;
 - carnivores that hunt prey, compete, and mutate across generations;
 - omnivores that can opportunistically eat plants or animals;
 - a tiny neural network per animal, inherited with mutation at reproduction;
@@ -23,3 +24,5 @@ This project is static. In the GitHub repository settings, enable GitHub Pages f
 ## Simulation notes
 
 The goal is not biological realism yet. The current model is intentionally compact so we can observe emergent dynamics, tune parameters, and later add richer evolution: species lineages, memory, terrain, disease, genome visualization, or selectable individuals.
+
+See `docs/nature-notes.md` for the living design notes that connect future simulation traits to ideas inspired by nature.

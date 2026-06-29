@@ -191,7 +191,7 @@ class Plant {
 }
 
 class Animal {
-  constructor(kind, x, y, brain, generation = 1, lineage = []) {
+  constructor(kind, x, y, brain, generation = 1, lineage = [], defenseTraits) {
     const profile = animalProfiles[kind];
     this.id = nextAnimalId;
     nextAnimalId += 1;
@@ -204,6 +204,7 @@ class Animal {
     this.age = 0;
     this.generation = generation;
     this.brain = brain || new NeuralBrain();
+    this.defenseTraits = defenseTraits ? { ...defenseTraits } : createDefenseTraits(kind);
     this.birthTick = world.tick;
     this.parentId = lineage.length ? lineage[lineage.length - 1].id : null;
     this.mutationCount = 0;
@@ -217,8 +218,8 @@ class Animal {
       totalMutations: 0,
     }];
     this.radius = profile.radius * randomBetween(0.9, 1.12);
-    this.maxSpeed = profile.maxSpeed * randomBetween(0.88, 1.14);
-    this.metabolism = profile.metabolism * randomBetween(0.9, 1.2);
+    this.maxSpeed = profile.maxSpeed * randomBetween(0.88, 1.14) * (1 - this.defenseTraits.armor * 0.12);
+    this.metabolism = profile.metabolism * randomBetween(0.9, 1.2) * (1 + this.defenseTraits.armor * 0.16 + this.defenseTraits.camouflage * 0.06);
     this.reproductionEnergy = profile.reproductionEnergy * randomBetween(0.92, 1.12);
     this.reproductionCooldown = randomBetween(120, 420);
     this.alive = true;
@@ -243,8 +244,9 @@ class Animal {
     const wanderAngle = Math.atan2(this.vy, this.vx) + turn * 0.65 + randomBetween(-0.08, 0.08);
     const foodPull = clamp(0.35 + forageBias * 0.3, 0.05, 0.72) * perception.food.strength;
     const dangerPull = caution * perception.danger.strength * animalProfiles[this.kind].predatorWeight;
-    const ax = Math.cos(wanderAngle) * 0.12 + Math.cos(targetAngle) * foodPull * 0.22 + Math.cos(dangerAngle) * dangerPull * 0.32;
-    const ay = Math.sin(wanderAngle) * 0.12 + Math.sin(targetAngle) * foodPull * 0.22 + Math.sin(dangerAngle) * dangerPull * 0.32;
+    const herdPull = this.kind === 'herbivore' ? this.defenseTraits.gregariousness * perception.herd.strength : 0;
+    const ax = Math.cos(wanderAngle) * 0.12 + Math.cos(targetAngle) * foodPull * 0.22 + Math.cos(dangerAngle) * dangerPull * 0.32 + perception.herd.dx * herdPull * 0.0018;
+    const ay = Math.sin(wanderAngle) * 0.12 + Math.sin(targetAngle) * foodPull * 0.22 + Math.sin(dangerAngle) * dangerPull * 0.32 + perception.herd.dy * herdPull * 0.0018;
 
     this.vx += ax;
     this.vy += ay;
@@ -273,18 +275,25 @@ class Animal {
     if (profile.plantNutrition > 0 && perception.plant && distance(this, perception.plant) < this.radius + 5) {
       const bite = Math.min(perception.plant.energy, 13 + profile.plantNutrition * 0.16);
       perception.plant.energy -= bite;
-      this.energy += bite * (profile.plantNutrition / 24);
+      this.energy += bite * (profile.plantNutrition / 24) * (1 + this.defenseTraits.energyAbsorption * 0.42);
       this.lastMeal = 0;
       addParticle(this.x, this.y, '#75d65f');
     }
 
     if (profile.prey.length && perception.prey && distance(this, perception.prey) < profile.attackRange + this.radius) {
       const prey = perception.prey;
-      if (prey.alive && Math.random() < 0.84) {
+      const defense = preyDefenseScore(prey);
+      const captureChance = clamp(0.84 - defense * 0.62, 0.12, 0.9);
+      if (prey.alive && Math.random() < captureChance) {
         prey.die(false);
         this.energy += profile.meatNutrition + prey.energy * 0.18;
         this.lastMeal = 0;
         addParticle(this.x, this.y, profile.color);
+      } else if (prey.alive) {
+        prey.energy -= Math.max(0.2, prey.defenseTraits.armor * 0.8);
+        prey.vx += randomBetween(-1.2, 1.2);
+        prey.vy += randomBetween(-1.2, 1.2);
+        addParticle(prey.x, prey.y, '#d8f3b5');
       }
     }
   }
@@ -296,16 +305,20 @@ class Animal {
     this.reproductionCooldown = randomBetween(360, 980);
     const mutationRate = 0.055 + world.climateStress * 0.055 + Math.random() * 0.03;
     const mutation = this.brain.cloneMutated(mutationRate, 0.22 + world.climateStress * 0.2);
+    const inheritedDefense = mutateDefenseTraits(this.kind, this.defenseTraits, mutationRate);
     const inheritedLineage = this.lineage.slice();
-    const child = new Animal(this.kind, wrapX(this.x + randomBetween(-14, 14)), wrapY(this.y + randomBetween(-14, 14)), mutation.brain, this.generation + 1, inheritedLineage);
+    const child = new Animal(this.kind, wrapX(this.x + randomBetween(-14, 14)), wrapY(this.y + randomBetween(-14, 14)), mutation.brain, this.generation + 1, inheritedLineage, inheritedDefense.traits);
     child.energy = cost * 0.8;
     child.parentId = this.id;
-    child.mutationCount = mutation.mutationCount;
-    child.totalMutations = this.totalMutations + mutation.mutationCount;
+    child.mutationCount = mutation.mutationCount + inheritedDefense.mutationCount;
+    child.totalMutations = this.totalMutations + child.mutationCount;
     child.lastMutationShift = mutation.averageShift;
 
     if (Math.random() < 0.025) {
       child.kind = mutateDiet(this.kind);
+      if (child.kind === 'herbivore' && this.kind !== 'herbivore') {
+        child.defenseTraits = createDefenseTraits('herbivore');
+      }
     }
     child.lineage = child.lineage.concat({
       id: child.id,
@@ -326,6 +339,61 @@ class Animal {
   }
 }
 
+function createDefenseTraits(kind) {
+  if (kind !== 'herbivore') {
+    return { camouflage: 0, armor: 0, energyAbsorption: 0, gregariousness: 0 };
+  }
+  return {
+    camouflage: randomBetween(0.08, 0.32),
+    armor: randomBetween(0.04, 0.24),
+    energyAbsorption: randomBetween(0.12, 0.38),
+    gregariousness: randomBetween(0.1, 0.34),
+  };
+}
+
+function mutateDefenseTraits(kind, traits, rate) {
+  const next = { ...traits };
+  let mutationCount = 0;
+  if (kind !== 'herbivore') return { traits: next, mutationCount };
+
+  for (const key of Object.keys(next)) {
+    if (Math.random() < rate * 2.6) {
+      next[key] = clamp(next[key] + gaussian() * 0.11, 0, 1);
+      mutationCount += 1;
+    }
+  }
+  return { traits: next, mutationCount };
+}
+
+function preyVisibility(prey) {
+  if (prey.kind !== 'herbivore') return 1;
+  const herdReveal = herdDefenseBonus(prey) * 0.18;
+  return clamp(1 - prey.defenseTraits.camouflage * 0.58 + herdReveal, 0.32, 1);
+}
+
+function preyDefenseScore(prey) {
+  if (prey.kind !== 'herbivore') return 0;
+  const traits = prey.defenseTraits;
+  return clamp(
+    traits.camouflage * 0.34 +
+    traits.armor * 0.36 +
+    traits.energyAbsorption * 0.08 +
+    herdDefenseBonus(prey) * 0.42,
+    0,
+    1
+  );
+}
+
+function herdDefenseBonus(animal) {
+  if (animal.kind !== 'herbivore') return 0;
+  let allies = 0;
+  for (const other of world.animals) {
+    if (other === animal || other.kind !== 'herbivore' || !other.alive) continue;
+    if (torusDistance(animal.x, animal.y, other.x, other.y) < 70) allies += 1;
+  }
+  return clamp((allies / 7) * animal.defenseTraits.gregariousness, 0, 1);
+}
+
 function perceive(animal) {
   let nearestPlant = null;
   let nearestPrey = null;
@@ -333,6 +401,9 @@ function perceive(animal) {
   let plantDistance = Infinity;
   let preyDistance = Infinity;
   let dangerDistance = Infinity;
+  let herdX = 0;
+  let herdY = 0;
+  let herdCount = 0;
   const profile = animalProfiles[animal.kind];
 
   if (profile.plantNutrition > 0) {
@@ -348,13 +419,20 @@ function perceive(animal) {
   for (const other of world.animals) {
     if (other === animal || !other.alive) continue;
     const d = torusDistance(animal.x, animal.y, other.x, other.y);
-    if (profile.prey.includes(other.kind) && d < preyDistance) {
-      preyDistance = d;
+    const visibleDistance = profile.prey.includes(other.kind) ? d / preyVisibility(other) : d;
+    if (profile.prey.includes(other.kind) && visibleDistance < preyDistance) {
+      preyDistance = visibleDistance;
       nearestPrey = other;
     }
     if (animalProfiles[other.kind].prey.includes(animal.kind) && d < dangerDistance) {
       dangerDistance = d;
       nearestDanger = other;
+    }
+    if (animal.kind === 'herbivore' && other.kind === 'herbivore' && d < 120) {
+      const vector = vectorTo(animal, other);
+      herdX += vector.dx;
+      herdY += vector.dy;
+      herdCount += 1;
     }
   }
 
@@ -369,6 +447,11 @@ function perceive(animal) {
     prey: nearestPrey,
     food: { dx: foodVector.dx, dy: foodVector.dy, strength: foodStrength },
     danger: { dx: dangerVector.dx, dy: dangerVector.dy, strength: dangerStrength },
+    herd: {
+      dx: herdCount ? herdX / herdCount : 0,
+      dy: herdCount ? herdY / herdCount : 0,
+      strength: clamp(herdCount / 8, 0, 1),
+    },
     inputs: [
       animal.energy / 160,
       animal.age / 5000,
@@ -597,9 +680,20 @@ function drawPlants() {
 function drawAnimals() {
   for (const animal of world.animals) {
     const profile = animalProfiles[animal.kind];
+    const traits = animal.defenseTraits;
     const speed = Math.hypot(animal.vx, animal.vy);
     const angle = Math.atan2(animal.vy, animal.vx);
     const r = animal.radius + clamp(animal.energy / 180, 0, 0.9);
+    if (animal.kind === 'herbivore' && traits.gregariousness > 0.55) {
+      ctx.save();
+      ctx.translate(animal.x, animal.y);
+      ctx.strokeStyle = `rgba(240, 200, 87, ${0.08 + traits.gregariousness * 0.16})`;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(0, 0, 18 + traits.gregariousness * 18, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
     if (animal.id === world.selectedAnimalId) {
       ctx.save();
       ctx.translate(animal.x, animal.y);
@@ -618,8 +712,12 @@ function drawAnimals() {
     ctx.save();
     ctx.translate(animal.x, animal.y);
     ctx.rotate(angle);
-    ctx.fillStyle = profile.color;
-    ctx.globalAlpha = clamp(0.54 + animal.energy / 170, 0.4, 1);
+    ctx.fillStyle = animal.kind === 'herbivore'
+      ? mixColor(profile.color, '#6a9d61', traits.camouflage * 0.75)
+      : profile.color;
+    ctx.globalAlpha = animal.kind === 'herbivore'
+      ? clamp(0.46 + animal.energy / 190 - traits.camouflage * 0.18, 0.32, 0.95)
+      : clamp(0.54 + animal.energy / 170, 0.4, 1);
     ctx.beginPath();
     ctx.moveTo(r + speed * 0.8, 0);
     ctx.lineTo(-r * 0.75, r * 0.72);
@@ -627,6 +725,11 @@ function drawAnimals() {
     ctx.lineTo(-r * 0.75, -r * 0.72);
     ctx.closePath();
     ctx.fill();
+    if (animal.kind === 'herbivore' && traits.armor > 0.35) {
+      ctx.strokeStyle = `rgba(238, 247, 239, ${0.18 + traits.armor * 0.42})`;
+      ctx.lineWidth = 0.8 + traits.armor * 1.8;
+      ctx.stroke();
+    }
     ctx.globalAlpha = 0.28;
     ctx.fillStyle = '#ffffff';
     ctx.beginPath();
@@ -713,6 +816,10 @@ function updateSelectionPanel() {
     selectedStat('Parent', animal.parentId ? `#${animal.parentId}` : '-'),
     selectedStat('Vitesse', animal.maxSpeed.toFixed(2)),
     selectedStat('Mutation', animal.mutationCount),
+    selectedStat('Camouflage', traitPercent(animal.defenseTraits.camouflage)),
+    selectedStat('Armure', traitPercent(animal.defenseTraits.armor)),
+    selectedStat('Absorption', traitPercent(animal.defenseTraits.energyAbsorption)),
+    selectedStat('Groupe', traitPercent(animal.defenseTraits.gregariousness)),
   ].join('');
   lineageListEl.innerHTML = animal.lineage.map((entry) => `
     <div class="lineage-item">
@@ -725,6 +832,10 @@ function updateSelectionPanel() {
 
 function selectedStat(label, value) {
   return `<article class="selected-stat"><span>${label}</span><strong>${value}</strong></article>`;
+}
+
+function traitPercent(value) {
+  return `${Math.round(value * 100)}%`;
 }
 
 function drawSelectedBrain() {
