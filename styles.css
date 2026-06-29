@@ -295,8 +295,8 @@ input:focus-visible {
 
 .lineage-list {
   display: grid;
-  gap: 6px;
-  max-height: 150px;
+  gap: 10px;
+  max-height: 260px;
   overflow: auto;
   padding-right: 2px;
 }
@@ -323,6 +323,54 @@ input:focus-visible {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.genealogy-section {
+  display: grid;
+  gap: 6px;
+}
+
+.genealogy-heading {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.genealogy-node {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) 40px;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  min-height: 42px;
+  padding: 7px 8px;
+  text-align: left;
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.genealogy-node.active {
+  border-color: rgba(238, 247, 239, 0.42);
+  background: rgba(255, 255, 255, 0.075);
+}
+
+.genealogy-node small {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.25;
+}
+
+.genealogy-mutations {
+  color: var(--muted);
+  font-size: 12px;
+  text-align: right;
+}
+
+.genealogy-empty {
+  padding: 8px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.16);
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .notes {

@@ -10,6 +10,7 @@ The first prototype models a small evolving world with:
 - carnivores that hunt prey, compete, can mutate toward cannibalism, and mutate across generations;
 - omnivores that can opportunistically eat plants or animals;
 - a tiny neural network per animal, inherited with mutation at reproduction;
+- a navigable genealogy view to move through ancestors, descendants, and mutation deltas;
 - changing climate cycles, storms, droughts, and seasonal variation;
 - live metrics for population, generation, biomass, and climate.
 

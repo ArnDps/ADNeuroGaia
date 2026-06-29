@@ -51,6 +51,7 @@ const world = {
   plants: [],
   animals: [],
   particles: [],
+  genealogyRecords: new Map(),
   selectedAnimalId: null,
   climate: {
     rain: 0.55,
@@ -224,6 +225,7 @@ class Animal {
     this.reproductionCooldown = randomBetween(120, 420);
     this.alive = true;
     this.lastMeal = 0;
+    registerAnimalRecord(this);
   }
 
   update() {
@@ -329,6 +331,7 @@ class Animal {
         child.defenseTraits = createDefenseTraits('carnivore');
       }
     }
+    refreshAnimalRecord(child);
     child.lineage = child.lineage.concat({
       id: child.id,
       generation: child.generation,
@@ -342,10 +345,91 @@ class Animal {
 
   die(feedSoil = true) {
     this.alive = false;
+    markAnimalDead(this);
     if (feedSoil && world.plants.length < 850) {
       spawnPlant(this.x + randomBetween(-8, 8), this.y + randomBetween(-8, 8), randomBetween(5, 15));
     }
   }
+}
+
+function registerAnimalRecord(animal) {
+  const existing = world.genealogyRecords.get(animal.id);
+  const record = {
+    id: animal.id,
+    kind: animal.kind,
+    generation: animal.generation,
+    parentId: animal.parentId,
+    childrenIds: existing?.childrenIds || [],
+    mutationCount: animal.mutationCount,
+    totalMutations: animal.totalMutations,
+    lastMutationShift: animal.lastMutationShift,
+    birthDay: Math.floor(animal.birthTick / 28),
+    deathDay: existing?.deathDay ?? null,
+    alive: animal.alive,
+    traits: { ...animal.defenseTraits },
+  };
+  world.genealogyRecords.set(animal.id, record);
+
+  if (record.parentId) {
+    const parent = world.genealogyRecords.get(record.parentId);
+    if (parent && !parent.childrenIds.includes(record.id)) {
+      parent.childrenIds.push(record.id);
+    }
+  }
+}
+
+function refreshAnimalRecord(animal) {
+  registerAnimalRecord(animal);
+}
+
+function markAnimalDead(animal) {
+  const record = world.genealogyRecords.get(animal.id);
+  if (!record) return;
+  record.alive = false;
+  record.deathDay = world.day;
+}
+
+function getAnimalRecord(id) {
+  return world.genealogyRecords.get(id) || null;
+}
+
+function getSelectedRecord() {
+  return getAnimalRecord(world.selectedAnimalId);
+}
+
+function getAncestorPath(record) {
+  const path = [];
+  let cursor = record;
+  const visited = new Set();
+  while (cursor && !visited.has(cursor.id)) {
+    path.unshift(cursor);
+    visited.add(cursor.id);
+    cursor = cursor.parentId ? getAnimalRecord(cursor.parentId) : null;
+  }
+  return path;
+}
+
+function traitDeltaSummary(record) {
+  const parent = record.parentId ? getAnimalRecord(record.parentId) : null;
+  if (!parent) return 'racine';
+  const keys = ['camouflage', 'armor', 'energyAbsorption', 'gregariousness', 'cannibalism'];
+  const deltas = keys
+    .map((key) => ({ key, delta: (record.traits[key] || 0) - (parent.traits[key] || 0) }))
+    .filter((entry) => Math.abs(entry.delta) >= 0.015)
+    .sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta))
+    .slice(0, 2);
+  if (!deltas.length) return '+0 trait';
+  return deltas.map((entry) => `${traitShortLabel(entry.key)} ${entry.delta >= 0 ? '+' : ''}${Math.round(entry.delta * 100)}%`).join(', ');
+}
+
+function traitShortLabel(key) {
+  return {
+    camouflage: 'cam',
+    armor: 'arm',
+    energyAbsorption: 'abs',
+    gregariousness: 'grp',
+    cannibalism: 'can',
+  }[key] || key;
 }
 
 function createDefenseTraits(kind) {
@@ -842,7 +926,8 @@ function metric(label, value) {
 
 function updateSelectionPanel() {
   const animal = getSelectedAnimal();
-  if (!animal) {
+  const record = animal ? getAnimalRecord(animal.id) : getSelectedRecord();
+  if (!record) {
     selectedBadgeEl.textContent = 'clique un animal';
     mutationBadgeEl.textContent = '0 mutations';
     lineageBadgeEl.textContent = 'generation 0';
@@ -856,30 +941,26 @@ function updateSelectionPanel() {
     return;
   }
 
-  const profile = animalProfiles[animal.kind];
-  selectedBadgeEl.textContent = `#${animal.id} ${animal.kind}`;
-  mutationBadgeEl.textContent = `${animal.totalMutations} mutations`;
-  lineageBadgeEl.textContent = `generation ${animal.generation}`;
+  const traits = animal?.defenseTraits || record.traits;
+  const status = animal ? 'vivant' : `mort J${record.deathDay ?? '?'}`;
+  selectedBadgeEl.textContent = `#${record.id} ${record.kind} - ${status}`;
+  mutationBadgeEl.textContent = `${record.totalMutations} mutations`;
+  lineageBadgeEl.textContent = `G${record.generation} | ${record.childrenIds.length} enfant(s)`;
   selectedStatsEl.innerHTML = [
-    selectedStat('Type', animal.kind),
-    selectedStat('Energie', Math.round(animal.energy)),
-    selectedStat('Age', `${Math.floor((world.tick - animal.birthTick) / 28)} j`),
-    selectedStat('Parent', animal.parentId ? `#${animal.parentId}` : '-'),
-    selectedStat('Vitesse', animal.maxSpeed.toFixed(2)),
-    selectedStat('Mutation', animal.mutationCount),
-    selectedStat('Camouflage', traitPercent(animal.defenseTraits.camouflage)),
-    selectedStat('Armure', traitPercent(animal.defenseTraits.armor)),
-    selectedStat('Absorption', traitPercent(animal.defenseTraits.energyAbsorption)),
-    selectedStat('Groupe', traitPercent(animal.defenseTraits.gregariousness)),
-    selectedStat('Cannibalisme', traitPercent(animal.defenseTraits.cannibalism)),
+    selectedStat('Type', record.kind),
+    selectedStat('Etat', status),
+    selectedStat('Energie', animal ? Math.round(animal.energy) : '-'),
+    selectedStat('Age', animal ? `${Math.floor((world.tick - animal.birthTick) / 28)} j` : `J${record.birthDay}-${record.deathDay ?? '?'}`),
+    selectedStat('Parent', record.parentId ? `#${record.parentId}` : '-'),
+    selectedStat('Mutation', record.mutationCount),
+    selectedStat('Delta traits', traitDeltaSummary(record)),
+    selectedStat('Camouflage', traitPercent(traits.camouflage)),
+    selectedStat('Armure', traitPercent(traits.armor)),
+    selectedStat('Absorption', traitPercent(traits.energyAbsorption)),
+    selectedStat('Groupe', traitPercent(traits.gregariousness)),
+    selectedStat('Cannibalisme', traitPercent(traits.cannibalism)),
   ].join('');
-  lineageListEl.innerHTML = animal.lineage.map((entry) => `
-    <div class="lineage-item">
-      <strong>G${entry.generation}</strong>
-      <span class="lineage-kind" style="color: ${animalProfiles[entry.kind]?.color || profile.color}">${entry.kind} #${entry.id}</span>
-      <span>+${entry.mutationCount}</span>
-    </div>
-  `).join('');
+  lineageListEl.innerHTML = renderGenealogyTree(record);
 }
 
 function selectedStat(label, value) {
@@ -890,9 +971,48 @@ function traitPercent(value) {
   return `${Math.round(value * 100)}%`;
 }
 
+function renderGenealogyTree(record) {
+  const ancestors = getAncestorPath(record);
+  const children = record.childrenIds
+    .map((id) => getAnimalRecord(id))
+    .filter(Boolean)
+    .sort((a, b) => a.generation - b.generation || a.id - b.id);
+
+  const ancestorRows = ancestors.map((entry) => genealogyButton(entry, entry.id === record.id ? 'current' : 'ancestor')).join('');
+  const childRows = children.length
+    ? children.map((entry) => genealogyButton(entry, 'child')).join('')
+    : '<div class="genealogy-empty">Aucun descendant connu pour le moment.</div>';
+
+  return `
+    <div class="genealogy-section">
+      <span class="genealogy-heading">Ancetres</span>
+      ${ancestorRows}
+    </div>
+    <div class="genealogy-section">
+      <span class="genealogy-heading">Descendants directs</span>
+      ${childRows}
+    </div>
+  `;
+}
+
+function genealogyButton(record, role) {
+  const color = animalProfiles[record.kind]?.color || '#eef7ef';
+  const state = record.alive ? 'vivant' : `mort J${record.deathDay ?? '?'}`;
+  const active = role === 'current' ? ' active' : '';
+  return `
+    <button class="genealogy-node${active}" type="button" data-select-id="${record.id}">
+      <strong>G${record.generation}</strong>
+      <span class="lineage-kind" style="color: ${color}">${record.kind} #${record.id}</span>
+      <span class="genealogy-mutations">+${record.mutationCount}</span>
+      <small>${state} | ${traitDeltaSummary(record)}</small>
+    </button>
+  `;
+}
+
 function drawSelectedBrain() {
   resizeBrainCanvas();
   const animal = getSelectedAnimal();
+  const record = animal ? null : getSelectedRecord();
   brainCtx.clearRect(0, 0, brainCanvas.width, brainCanvas.height);
   brainCtx.fillStyle = '#0a1211';
   brainCtx.fillRect(0, 0, brainCanvas.width, brainCanvas.height);
@@ -901,8 +1021,13 @@ function drawSelectedBrain() {
     brainCtx.fillStyle = 'rgba(238, 247, 239, 0.58)';
     brainCtx.font = '13px Segoe UI, sans-serif';
     brainCtx.textAlign = 'center';
-    brainCtx.fillText('Clique sur un animal', brainCanvas.width / 2, brainCanvas.height / 2 - 4);
-    brainCtx.fillText('pour inspecter son cerveau', brainCanvas.width / 2, brainCanvas.height / 2 + 16);
+    if (record) {
+      brainCtx.fillText(`Individu #${record.id} archive`, brainCanvas.width / 2, brainCanvas.height / 2 - 4);
+      brainCtx.fillText('cerveau dynamique indisponible', brainCanvas.width / 2, brainCanvas.height / 2 + 16);
+    } else {
+      brainCtx.fillText('Clique sur un animal', brainCanvas.width / 2, brainCanvas.height / 2 - 4);
+      brainCtx.fillText('pour inspecter son cerveau', brainCanvas.width / 2, brainCanvas.height / 2 + 16);
+    }
     return;
   }
 
@@ -1059,6 +1184,7 @@ function resetWorld() {
   world.plants = [];
   world.animals = [];
   world.particles = [];
+  world.genealogyRecords = new Map();
   world.selectedAnimalId = null;
   world.climate = { rain: 0.55, light: 0.7, temperature: 0.62, storm: 0, drought: 0 };
   for (let i = 0; i < 430; i += 1) spawnPlant(Math.random() * world.width, Math.random() * world.height, randomBetween(10, 58));
@@ -1181,6 +1307,11 @@ toggleRunButton.addEventListener('click', () => {
 resetButton.addEventListener('click', resetWorld);
 canvas.addEventListener('click', (event) => {
   selectAnimalAt(event.clientX, event.clientY);
+});
+lineageListEl.addEventListener('click', (event) => {
+  const button = event.target.closest('[data-select-id]');
+  if (!button) return;
+  world.selectedAnimalId = Number(button.dataset.selectId);
 });
 speedInput.addEventListener('input', () => {
   syncSpeedControl();
