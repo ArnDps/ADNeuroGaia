@@ -347,6 +347,11 @@ input:focus-visible {
   background: rgba(0, 0, 0, 0.18);
 }
 
+.genealogy-node:hover {
+  border-color: rgba(255, 255, 255, 0.28);
+  background: rgba(255, 255, 255, 0.055);
+}
+
 .genealogy-node.active {
   border-color: rgba(238, 247, 239, 0.42);
   background: rgba(255, 255, 255, 0.075);
