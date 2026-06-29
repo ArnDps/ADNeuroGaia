@@ -8,6 +8,10 @@ const resetButton = document.getElementById('reset');
 const speedInput = document.getElementById('speed');
 const speedValueEl = document.getElementById('speedValue');
 const climateStressInput = document.getElementById('climateStress');
+const endModeInput = document.getElementById('endMode');
+const scenarioStatusEl = document.getElementById('scenarioStatus');
+const targetGenerationInput = document.getElementById('targetGeneration');
+const targetGenerationValueEl = document.getElementById('targetGenerationValue');
 const brainCanvas = document.getElementById('brain');
 const brainCtx = brainCanvas.getContext('2d');
 const selectedBadgeEl = document.getElementById('selectedBadge');
@@ -20,6 +24,14 @@ const inputLabels = ['energie', 'age', 'pluie', 'lumiere', 'temp', 'orage', 'nou
 const outputLabels = ['tourner', 'vitesse', 'prudence', 'regime'];
 let nextAnimalId = 1;
 
+const endModeLabels = {
+  sandbox: 'bac a sable',
+  extinction: 'extinction totale',
+  equilibrium: 'equilibre stable',
+  climateCollapse: 'catastrophe climatique',
+  generationGoal: 'objectif generation',
+};
+
 const world = {
   width: 1280,
   height: 760,
@@ -29,6 +41,13 @@ const world = {
   speed: 1,
   stepBudget: 0,
   climateStress: 0.45,
+  endMode: 'sandbox',
+  targetGeneration: 12,
+  ended: false,
+  endReason: '',
+  populationHistory: [],
+  collapseStarted: false,
+  collapseStartTick: 0,
   plants: [],
   animals: [],
   particles: [],
@@ -386,6 +405,7 @@ function updateClimate() {
 
   if (Math.random() < 0.0018 * stress) world.climate.storm = randomBetween(0.38, 0.95);
   if (Math.random() < 0.0015 * stress) world.climate.drought = randomBetween(0.35, 0.9);
+  applyScenarioClimate();
 }
 
 function step() {
@@ -396,14 +416,128 @@ function step() {
   for (const animal of world.animals) animal.update();
   world.animals = world.animals.filter((animal) => animal.alive);
 
-  if (world.plants.length < 240) {
+  if (shouldAutoSeedPlants() && world.plants.length < 240) {
     for (let i = 0; i < 5; i += 1) spawnPlant(Math.random() * world.width, Math.random() * world.height, randomBetween(8, 30));
   }
-  if (world.animals.length < 24) seedAnimals(8);
+  if (shouldAutoSeedAnimals() && world.animals.length < 24) seedAnimals(8);
 
   updateParticles();
   world.tick += 1;
   world.day = Math.floor(world.tick / 28);
+  evaluateEndConditions();
+}
+
+function shouldAutoSeedPlants() {
+  return world.endMode === 'sandbox' || world.endMode === 'generationGoal' || world.endMode === 'equilibrium';
+}
+
+function shouldAutoSeedAnimals() {
+  return world.endMode === 'sandbox' || world.endMode === 'generationGoal';
+}
+
+function applyScenarioClimate() {
+  if (world.endMode !== 'climateCollapse') return;
+  if (!world.collapseStarted && world.day >= 30) {
+    world.collapseStarted = true;
+    world.collapseStartTick = world.tick;
+  }
+  if (!world.collapseStarted) return;
+
+  const collapseAge = Math.max(0, world.tick - world.collapseStartTick);
+  const pressure = clamp(collapseAge / 1500, 0, 1);
+  world.climate.drought = clamp(Math.max(world.climate.drought, 0.45 + pressure * 0.55), 0, 1);
+  world.climate.storm = clamp(Math.max(world.climate.storm, 0.22 + Math.sin(world.tick * 0.045) * 0.2 + pressure * 0.35), 0, 1);
+  world.climate.light = clamp(world.climate.light * (1 - pressure * 0.55), 0.02, 1);
+  world.climate.rain = clamp(world.climate.rain * (1 - pressure * 0.82), 0, 1);
+  world.climate.temperature = clamp(0.72 + pressure * 0.26, 0, 1);
+}
+
+function evaluateEndConditions() {
+  if (world.ended || world.endMode === 'sandbox') return;
+
+  const counts = getPopulationCounts();
+  const totalAnimals = counts.herbivore + counts.carnivore + counts.omnivore;
+  const totalLife = totalAnimals + world.plants.length;
+
+  if (world.endMode === 'extinction' && totalLife === 0) {
+    finishScenario('Extinction totale atteinte');
+    return;
+  }
+
+  if (world.endMode === 'extinction' && (totalAnimals === 0 || world.plants.length === 0)) {
+    finishScenario(totalAnimals === 0 ? 'Extinction animale totale' : 'Extinction vegetale totale');
+    return;
+  }
+
+  if (world.endMode === 'climateCollapse') {
+    if (world.collapseStarted && totalAnimals === 0) {
+      finishScenario('Catastrophe fatale: aucun animal survivant');
+    }
+    return;
+  }
+
+  if (world.endMode === 'generationGoal' && counts.maxGeneration >= world.targetGeneration) {
+    finishScenario(`Objectif atteint: generation ${counts.maxGeneration}`);
+    return;
+  }
+
+  if (world.endMode === 'equilibrium') {
+    const sample = {
+      tick: world.tick,
+      plants: world.plants.length,
+      animals: totalAnimals,
+      herbivore: counts.herbivore,
+      carnivore: counts.carnivore,
+      omnivore: counts.omnivore,
+    };
+    world.populationHistory.push(sample);
+    world.populationHistory = world.populationHistory.filter((entry) => world.tick - entry.tick <= 1800);
+    if (world.tick > 2200 && world.populationHistory.length > 40 && isStableEquilibrium(world.populationHistory)) {
+      finishScenario('Equilibre stable detecte');
+    }
+  }
+}
+
+function isStableEquilibrium(history) {
+  const first = history[0];
+  const last = history[history.length - 1];
+  const plantDrift = relativeDrift(first.plants, last.plants);
+  const animalDrift = relativeDrift(first.animals, last.animals);
+  const hasPredatorsAndPrey = last.herbivore > 10 && (last.carnivore + last.omnivore) > 4;
+  const enoughLife = last.plants > 220 && last.animals > 35;
+  return enoughLife && hasPredatorsAndPrey && plantDrift < 0.16 && animalDrift < 0.18;
+}
+
+function relativeDrift(a, b) {
+  return Math.abs(a - b) / Math.max(1, (a + b) / 2);
+}
+
+function finishScenario(reason) {
+  world.ended = true;
+  world.running = false;
+  world.endReason = reason;
+  toggleRunButton.textContent = 'Reprendre';
+}
+
+function getPopulationCounts() {
+  return world.animals.reduce((acc, animal) => {
+    acc[animal.kind] = (acc[animal.kind] || 0) + 1;
+    acc.maxGeneration = Math.max(acc.maxGeneration, animal.generation);
+    return acc;
+  }, { herbivore: 0, carnivore: 0, omnivore: 0, maxGeneration: 1 });
+}
+
+function getScenarioStatus(counts) {
+  if (world.endMode === 'sandbox') return endModeLabels.sandbox;
+  if (world.endMode === 'generationGoal') return `generation ${counts.maxGeneration}/${world.targetGeneration}`;
+  if (world.endMode === 'climateCollapse') {
+    return world.collapseStarted ? 'effondrement en cours' : `catastrophe a J30`;
+  }
+  if (world.endMode === 'equilibrium') {
+    const progress = Math.min(100, Math.round((world.populationHistory.length / 40) * 100));
+    return `stabilite ${progress}%`;
+  }
+  return endModeLabels[world.endMode] || 'scenario';
 }
 
 function draw() {
@@ -424,6 +558,7 @@ function draw() {
   drawPlants();
   drawAnimals();
   drawParticles();
+  drawEndOverlay();
   ctx.restore();
   updateReadouts();
 }
@@ -512,16 +647,29 @@ function drawParticles() {
   ctx.globalAlpha = 1;
 }
 
+function drawEndOverlay() {
+  if (!world.ended) return;
+  ctx.save();
+  ctx.fillStyle = 'rgba(4, 8, 7, 0.62)';
+  ctx.fillRect(0, 0, world.width, world.height);
+  ctx.fillStyle = 'rgba(238, 247, 239, 0.94)';
+  ctx.textAlign = 'center';
+  ctx.font = '34px Segoe UI, sans-serif';
+  ctx.fillText('Simulation terminee', world.width / 2, world.height / 2 - 18);
+  ctx.fillStyle = 'rgba(238, 247, 239, 0.7)';
+  ctx.font = '17px Segoe UI, sans-serif';
+  ctx.fillText(world.endReason, world.width / 2, world.height / 2 + 18);
+  ctx.restore();
+}
+
 function updateReadouts() {
-  const counts = world.animals.reduce((acc, animal) => {
-    acc[animal.kind] = (acc[animal.kind] || 0) + 1;
-    acc.maxGeneration = Math.max(acc.maxGeneration, animal.generation);
-    return acc;
-  }, { herbivore: 0, carnivore: 0, omnivore: 0, maxGeneration: 1 });
+  const counts = getPopulationCounts();
   const biomass = Math.round(world.plants.reduce((sum, plant) => sum + plant.energy, 0));
 
   clockEl.textContent = `jour ${world.day}`;
   climateReadoutEl.textContent = `pluie ${percent(world.climate.rain)} | lumiere ${percent(world.climate.light)} | temp ${percent(world.climate.temperature)}`;
+  scenarioStatusEl.textContent = world.ended ? world.endReason : getScenarioStatus(counts);
+  targetGenerationValueEl.textContent = String(world.targetGeneration);
   metricsEl.innerHTML = [
     metric('Plantes', world.plants.length),
     metric('Biomasse', biomass),
@@ -737,6 +885,14 @@ function resetWorld() {
   world.day = 0;
   world.tick = 0;
   world.stepBudget = 0;
+  world.endMode = endModeInput.value;
+  world.targetGeneration = Number(targetGenerationInput.value);
+  world.ended = false;
+  world.endReason = '';
+  world.populationHistory = [];
+  world.collapseStarted = false;
+  world.collapseStartTick = 0;
+  world.running = true;
   world.plants = [];
   world.animals = [];
   world.particles = [];
@@ -745,11 +901,13 @@ function resetWorld() {
   for (let i = 0; i < 430; i += 1) spawnPlant(Math.random() * world.width, Math.random() * world.height, randomBetween(10, 58));
   seedAnimals(1);
   world.selectedAnimalId = world.animals[0]?.id || null;
+  toggleRunButton.textContent = 'Pause';
 }
 
 function animationLoop() {
+  syncScenarioControls();
   syncSpeedControl();
-  if (world.running) {
+  if (world.running && !world.ended) {
     world.stepBudget += world.speed;
     const iterations = Math.min(8, Math.floor(world.stepBudget));
     world.stepBudget -= iterations;
@@ -766,6 +924,11 @@ function syncSpeedControl() {
     world.stepBudget = Math.min(world.stepBudget, Math.max(0, speed));
   }
   speedValueEl.textContent = `${world.speed.toFixed(2)}x`;
+}
+
+function syncScenarioControls() {
+  targetGenerationValueEl.textContent = targetGenerationInput.value;
+  world.targetGeneration = Number(targetGenerationInput.value);
 }
 
 function resizeCanvasToDisplay() {
@@ -844,6 +1007,10 @@ function parseHex(hex) {
 }
 
 toggleRunButton.addEventListener('click', () => {
+  if (world.ended) {
+    resetWorld();
+    return;
+  }
   world.running = !world.running;
   toggleRunButton.textContent = world.running ? 'Pause' : 'Reprendre';
 });
@@ -857,6 +1024,18 @@ speedInput.addEventListener('input', () => {
 });
 climateStressInput.addEventListener('input', () => {
   world.climateStress = Number(climateStressInput.value);
+});
+endModeInput.addEventListener('change', () => {
+  world.endMode = endModeInput.value;
+  world.ended = false;
+  world.endReason = '';
+  world.populationHistory = [];
+  world.collapseStarted = false;
+  world.collapseStartTick = 0;
+  toggleRunButton.textContent = world.running ? 'Pause' : 'Reprendre';
+});
+targetGenerationInput.addEventListener('input', () => {
+  syncScenarioControls();
 });
 
 resetWorld();

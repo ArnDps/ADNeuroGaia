@@ -27,7 +27,8 @@ body {
 }
 
 button,
-input {
+input,
+select {
   font: inherit;
 }
 
@@ -174,6 +175,31 @@ input[type="range"] {
   accent-color: var(--accent);
 }
 
+.select-field {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 12px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+select {
+  width: 100%;
+  min-height: 38px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-2);
+  color: var(--text);
+  padding: 0 10px;
+}
+
+select:focus-visible,
+button:focus-visible,
+input:focus-visible {
+  outline: 2px solid rgba(120, 208, 120, 0.7);
+  outline-offset: 2px;
+}
+
 .metric-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -204,7 +230,8 @@ input[type="range"] {
 
 .inspector,
 .brain-panel,
-.lineage-panel {
+.lineage-panel,
+.scenario-panel {
   padding: 12px;
   border: 1px solid var(--line);
   border-radius: 8px;
