@@ -6,7 +6,19 @@ const climateReadoutEl = document.getElementById('climateReadout');
 const toggleRunButton = document.getElementById('toggleRun');
 const resetButton = document.getElementById('reset');
 const speedInput = document.getElementById('speed');
+const speedValueEl = document.getElementById('speedValue');
 const climateStressInput = document.getElementById('climateStress');
+const brainCanvas = document.getElementById('brain');
+const brainCtx = brainCanvas.getContext('2d');
+const selectedBadgeEl = document.getElementById('selectedBadge');
+const selectedStatsEl = document.getElementById('selectedStats');
+const mutationBadgeEl = document.getElementById('mutationBadge');
+const lineageBadgeEl = document.getElementById('lineageBadge');
+const lineageListEl = document.getElementById('lineageList');
+
+const inputLabels = ['energie', 'age', 'pluie', 'lumiere', 'temp', 'orage', 'nour. x', 'nour. y', 'danger x', 'danger y'];
+const outputLabels = ['tourner', 'vitesse', 'prudence', 'regime'];
+let nextAnimalId = 1;
 
 const world = {
   width: 1280,
@@ -15,10 +27,12 @@ const world = {
   tick: 0,
   running: true,
   speed: 1,
+  stepBudget: 0,
   climateStress: 0.45,
   plants: [],
   animals: [],
   particles: [],
+  selectedAnimalId: null,
   climate: {
     rain: 0.55,
     light: 0.7,
@@ -73,6 +87,9 @@ class NeuralBrain {
     this.hiddenCount = hiddenCount;
     this.outputCount = outputCount;
     this.weights = weights ? weights.slice() : NeuralBrain.randomWeights(inputCount, hiddenCount, outputCount);
+    this.lastInputs = Array.from({ length: inputCount }, () => 0);
+    this.lastHidden = Array.from({ length: hiddenCount }, () => 0);
+    this.lastOutputs = Array.from({ length: outputCount }, () => 0);
   }
 
   static randomWeights(inputCount, hiddenCount, outputCount) {
@@ -81,14 +98,24 @@ class NeuralBrain {
   }
 
   cloneMutated(rate = 0.08, strength = 0.28) {
+    let mutationCount = 0;
+    let totalShift = 0;
     const weights = this.weights.map((weight) => {
       if (Math.random() > rate) return weight;
-      return clamp(weight + gaussian() * strength, -2.8, 2.8);
+      const nextWeight = clamp(weight + gaussian() * strength, -2.8, 2.8);
+      mutationCount += 1;
+      totalShift += Math.abs(nextWeight - weight);
+      return nextWeight;
     });
-    return new NeuralBrain(this.inputCount, this.hiddenCount, this.outputCount, weights);
+    return {
+      brain: new NeuralBrain(this.inputCount, this.hiddenCount, this.outputCount, weights),
+      mutationCount,
+      averageShift: mutationCount ? totalShift / mutationCount : 0,
+    };
   }
 
   think(inputs) {
+    this.lastInputs = inputs.slice();
     const hidden = [];
     let cursor = 0;
     for (let h = 0; h < this.hiddenCount; h += 1) {
@@ -99,6 +126,7 @@ class NeuralBrain {
       sum += this.weights[cursor++];
       hidden.push(Math.tanh(sum));
     }
+    this.lastHidden = hidden.slice();
 
     const outputs = [];
     for (let o = 0; o < this.outputCount; o += 1) {
@@ -109,6 +137,7 @@ class NeuralBrain {
       sum += this.weights[cursor++];
       outputs.push(Math.tanh(sum));
     }
+    this.lastOutputs = outputs.slice();
     return outputs;
   }
 }
@@ -143,8 +172,10 @@ class Plant {
 }
 
 class Animal {
-  constructor(kind, x, y, brain, generation = 1) {
+  constructor(kind, x, y, brain, generation = 1, lineage = []) {
     const profile = animalProfiles[kind];
+    this.id = nextAnimalId;
+    nextAnimalId += 1;
     this.kind = kind;
     this.x = x;
     this.y = y;
@@ -154,6 +185,18 @@ class Animal {
     this.age = 0;
     this.generation = generation;
     this.brain = brain || new NeuralBrain();
+    this.birthTick = world.tick;
+    this.parentId = lineage.length ? lineage[lineage.length - 1].id : null;
+    this.mutationCount = 0;
+    this.totalMutations = lineage.length ? lineage[lineage.length - 1].totalMutations : 0;
+    this.lastMutationShift = 0;
+    this.lineage = lineage.length ? lineage.slice(-7) : [{
+      id: this.id,
+      generation: this.generation,
+      kind: this.kind,
+      mutationCount: 0,
+      totalMutations: 0,
+    }];
     this.radius = profile.radius * randomBetween(0.9, 1.12);
     this.maxSpeed = profile.maxSpeed * randomBetween(0.88, 1.14);
     this.metabolism = profile.metabolism * randomBetween(0.9, 1.2);
@@ -233,13 +276,25 @@ class Animal {
     this.energy -= cost;
     this.reproductionCooldown = randomBetween(360, 980);
     const mutationRate = 0.055 + world.climateStress * 0.055 + Math.random() * 0.03;
-    const childBrain = this.brain.cloneMutated(mutationRate, 0.22 + world.climateStress * 0.2);
-    const child = new Animal(this.kind, wrapX(this.x + randomBetween(-14, 14)), wrapY(this.y + randomBetween(-14, 14)), childBrain, this.generation + 1);
+    const mutation = this.brain.cloneMutated(mutationRate, 0.22 + world.climateStress * 0.2);
+    const inheritedLineage = this.lineage.slice();
+    const child = new Animal(this.kind, wrapX(this.x + randomBetween(-14, 14)), wrapY(this.y + randomBetween(-14, 14)), mutation.brain, this.generation + 1, inheritedLineage);
     child.energy = cost * 0.8;
+    child.parentId = this.id;
+    child.mutationCount = mutation.mutationCount;
+    child.totalMutations = this.totalMutations + mutation.mutationCount;
+    child.lastMutationShift = mutation.averageShift;
 
     if (Math.random() < 0.025) {
       child.kind = mutateDiet(this.kind);
     }
+    child.lineage = child.lineage.concat({
+      id: child.id,
+      generation: child.generation,
+      kind: child.kind,
+      mutationCount: child.mutationCount,
+      totalMutations: child.totalMutations,
+    }).slice(-8);
     world.animals.push(child);
     addParticle(this.x, this.y, '#f5f0a3');
   }
@@ -410,6 +465,21 @@ function drawAnimals() {
     const speed = Math.hypot(animal.vx, animal.vy);
     const angle = Math.atan2(animal.vy, animal.vx);
     const r = animal.radius + clamp(animal.energy / 180, 0, 0.9);
+    if (animal.id === world.selectedAnimalId) {
+      ctx.save();
+      ctx.translate(animal.x, animal.y);
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.82)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(0, 0, r + 8 + Math.sin(world.tick * 0.14) * 1.8, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.strokeStyle = profile.color;
+      ctx.globalAlpha = 0.55;
+      ctx.beginPath();
+      ctx.arc(0, 0, r + 14, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
     ctx.save();
     ctx.translate(animal.x, animal.y);
     ctx.rotate(angle);
@@ -460,10 +530,171 @@ function updateReadouts() {
     metric('Omnivores', counts.omnivore),
     metric('Generation max', counts.maxGeneration),
   ].join('');
+  updateSelectionPanel();
+  drawSelectedBrain();
 }
 
 function metric(label, value) {
   return `<article class="metric"><span>${label}</span><strong>${value}</strong></article>`;
+}
+
+function updateSelectionPanel() {
+  const animal = getSelectedAnimal();
+  if (!animal) {
+    selectedBadgeEl.textContent = 'clique un animal';
+    mutationBadgeEl.textContent = '0 mutations';
+    lineageBadgeEl.textContent = 'generation 0';
+    selectedStatsEl.innerHTML = [
+      selectedStat('Type', '-'),
+      selectedStat('Energie', '-'),
+      selectedStat('Age', '-'),
+      selectedStat('Parent', '-'),
+    ].join('');
+    lineageListEl.innerHTML = '<div class="lineage-item"><strong>-</strong><span class="lineage-kind">aucune selection</span><span>-</span></div>';
+    return;
+  }
+
+  const profile = animalProfiles[animal.kind];
+  selectedBadgeEl.textContent = `#${animal.id} ${animal.kind}`;
+  mutationBadgeEl.textContent = `${animal.totalMutations} mutations`;
+  lineageBadgeEl.textContent = `generation ${animal.generation}`;
+  selectedStatsEl.innerHTML = [
+    selectedStat('Type', animal.kind),
+    selectedStat('Energie', Math.round(animal.energy)),
+    selectedStat('Age', `${Math.floor((world.tick - animal.birthTick) / 28)} j`),
+    selectedStat('Parent', animal.parentId ? `#${animal.parentId}` : '-'),
+    selectedStat('Vitesse', animal.maxSpeed.toFixed(2)),
+    selectedStat('Mutation', animal.mutationCount),
+  ].join('');
+  lineageListEl.innerHTML = animal.lineage.map((entry) => `
+    <div class="lineage-item">
+      <strong>G${entry.generation}</strong>
+      <span class="lineage-kind" style="color: ${animalProfiles[entry.kind]?.color || profile.color}">${entry.kind} #${entry.id}</span>
+      <span>+${entry.mutationCount}</span>
+    </div>
+  `).join('');
+}
+
+function selectedStat(label, value) {
+  return `<article class="selected-stat"><span>${label}</span><strong>${value}</strong></article>`;
+}
+
+function drawSelectedBrain() {
+  resizeBrainCanvas();
+  const animal = getSelectedAnimal();
+  brainCtx.clearRect(0, 0, brainCanvas.width, brainCanvas.height);
+  brainCtx.fillStyle = '#0a1211';
+  brainCtx.fillRect(0, 0, brainCanvas.width, brainCanvas.height);
+
+  if (!animal) {
+    brainCtx.fillStyle = 'rgba(238, 247, 239, 0.58)';
+    brainCtx.font = '13px Segoe UI, sans-serif';
+    brainCtx.textAlign = 'center';
+    brainCtx.fillText('Clique sur un animal', brainCanvas.width / 2, brainCanvas.height / 2 - 4);
+    brainCtx.fillText('pour inspecter son cerveau', brainCanvas.width / 2, brainCanvas.height / 2 + 16);
+    return;
+  }
+
+  const brain = animal.brain;
+  const padding = 26;
+  const columns = [
+    buildNeuronColumn(brain.lastInputs, padding, inputLabels),
+    buildNeuronColumn(brain.lastHidden, brainCanvas.width * 0.5, null),
+    buildNeuronColumn(brain.lastOutputs, brainCanvas.width - padding, outputLabels),
+  ];
+
+  drawBrainConnections(brain, columns);
+  drawBrainNeurons(columns, animalProfiles[animal.kind].color);
+}
+
+function buildNeuronColumn(values, x, labels) {
+  const top = 18;
+  const bottom = brainCanvas.height - 20;
+  const span = bottom - top;
+  return values.map((value, index) => ({
+    x,
+    y: values.length === 1 ? brainCanvas.height / 2 : top + (span * index) / (values.length - 1),
+    value,
+    label: labels ? labels[index] : '',
+  }));
+}
+
+function drawBrainConnections(brain, columns) {
+  let cursor = 0;
+  drawWeightBlock(columns[0], columns[1], brain.weights, cursor);
+  cursor += brain.inputCount * brain.hiddenCount + brain.hiddenCount;
+  drawWeightBlock(columns[1], columns[2], brain.weights, cursor);
+}
+
+function drawWeightBlock(fromColumn, toColumn, weights, startCursor) {
+  let cursor = startCursor;
+  for (const to of toColumn) {
+    for (const from of fromColumn) {
+      const weight = weights[cursor];
+      const alpha = clamp(Math.abs(weight) / 2.2, 0.08, 0.75);
+      brainCtx.strokeStyle = weight >= 0 ? `rgba(120, 208, 120, ${alpha})` : `rgba(236, 106, 94, ${alpha})`;
+      brainCtx.lineWidth = 0.8 + Math.abs(weight) * 0.75;
+      brainCtx.beginPath();
+      brainCtx.moveTo(from.x, from.y);
+      brainCtx.lineTo(to.x, to.y);
+      brainCtx.stroke();
+      cursor += 1;
+    }
+    cursor += 1;
+  }
+}
+
+function drawBrainNeurons(columns, color) {
+  for (const column of columns) {
+    for (const neuron of column) {
+      const activation = clamp((neuron.value + 1) / 2, 0, 1);
+      brainCtx.fillStyle = mixColor('#17221f', color, activation);
+      brainCtx.strokeStyle = 'rgba(255, 255, 255, 0.48)';
+      brainCtx.lineWidth = 1;
+      brainCtx.beginPath();
+      brainCtx.arc(neuron.x, neuron.y, 6.5, 0, Math.PI * 2);
+      brainCtx.fill();
+      brainCtx.stroke();
+
+      if (neuron.label) {
+        const alignRight = neuron.x < brainCanvas.width / 2;
+        brainCtx.fillStyle = 'rgba(238, 247, 239, 0.62)';
+        brainCtx.font = '10px Segoe UI, sans-serif';
+        brainCtx.textAlign = alignRight ? 'left' : 'right';
+        brainCtx.fillText(neuron.label, neuron.x + (alignRight ? 10 : -10), neuron.y + 3);
+      }
+    }
+  }
+}
+
+function resizeBrainCanvas() {
+  const ratio = window.devicePixelRatio || 1;
+  const width = Math.floor(brainCanvas.clientWidth * ratio);
+  const height = Math.floor(brainCanvas.clientHeight * ratio);
+  if (brainCanvas.width !== width || brainCanvas.height !== height) {
+    brainCanvas.width = width;
+    brainCanvas.height = height;
+  }
+}
+
+function getSelectedAnimal() {
+  return world.animals.find((animal) => animal.id === world.selectedAnimalId) || null;
+}
+
+function selectAnimalAt(clientX, clientY) {
+  const rect = canvas.getBoundingClientRect();
+  const worldX = ((clientX - rect.left) / rect.width) * world.width;
+  const worldY = ((clientY - rect.top) / rect.height) * world.height;
+  let nearest = null;
+  let nearestDistance = 90;
+  for (const animal of world.animals) {
+    const d = torusDistance(worldX, worldY, animal.x, animal.y);
+    if (d < nearestDistance) {
+      nearest = animal;
+      nearestDistance = d;
+    }
+  }
+  world.selectedAnimalId = nearest ? nearest.id : null;
 }
 
 function updateParticles() {
@@ -502,23 +733,39 @@ function seedAnimals(countMultiplier = 1) {
 }
 
 function resetWorld() {
+  nextAnimalId = 1;
   world.day = 0;
   world.tick = 0;
+  world.stepBudget = 0;
   world.plants = [];
   world.animals = [];
   world.particles = [];
+  world.selectedAnimalId = null;
   world.climate = { rain: 0.55, light: 0.7, temperature: 0.62, storm: 0, drought: 0 };
   for (let i = 0; i < 430; i += 1) spawnPlant(Math.random() * world.width, Math.random() * world.height, randomBetween(10, 58));
   seedAnimals(1);
+  world.selectedAnimalId = world.animals[0]?.id || null;
 }
 
 function animationLoop() {
+  syncSpeedControl();
   if (world.running) {
-    const iterations = Math.max(1, Math.round(world.speed));
+    world.stepBudget += world.speed;
+    const iterations = Math.min(8, Math.floor(world.stepBudget));
+    world.stepBudget -= iterations;
     for (let i = 0; i < iterations; i += 1) step();
   }
   draw();
   requestAnimationFrame(animationLoop);
+}
+
+function syncSpeedControl() {
+  const speed = Number(speedInput.value);
+  if (world.speed !== speed) {
+    world.speed = speed;
+    world.stepBudget = Math.min(world.stepBudget, Math.max(0, speed));
+  }
+  speedValueEl.textContent = `${world.speed.toFixed(2)}x`;
 }
 
 function resizeCanvasToDisplay() {
@@ -602,8 +849,11 @@ toggleRunButton.addEventListener('click', () => {
 });
 
 resetButton.addEventListener('click', resetWorld);
+canvas.addEventListener('click', (event) => {
+  selectAnimalAt(event.clientX, event.clientY);
+});
 speedInput.addEventListener('input', () => {
-  world.speed = Number(speedInput.value);
+  syncSpeedControl();
 });
 climateStressInput.addEventListener('input', () => {
   world.climateStress = Number(climateStressInput.value);
