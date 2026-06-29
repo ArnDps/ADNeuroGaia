@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ADNeuroGaia</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="app-shell">
+    <section class="world-panel" aria-label="Simulation ADNeuroGaia">
+      <canvas id="world" width="1280" height="760"></canvas>
+      <div class="hud top-left">
+        <strong>ADNeuroGaia</strong>
+        <span id="clock">jour 0</span>
+      </div>
+      <div class="hud top-right" id="climateReadout"></div>
+      <div class="legend" aria-label="Legende">
+        <span><i class="dot plant"></i>plantes</span>
+        <span><i class="dot herbivore"></i>herbivores</span>
+        <span><i class="dot carnivore"></i>carnivores</span>
+        <span><i class="dot omnivore"></i>omnivores</span>
+      </div>
+    </section>
+
+    <aside class="control-panel">
+      <div class="brand-block">
+        <h1>ADNeuroGaia</h1>
+        <p>Ecosysteme neuronal evolutif</p>
+      </div>
+
+      <div class="button-row">
+        <button id="toggleRun" type="button">Pause</button>
+        <button id="reset" type="button">Reset</button>
+      </div>
+
+      <label class="range-field">
+        <span>Vitesse</span>
+        <input id="speed" type="range" min="0.25" max="4" step="0.25" value="1">
+      </label>
+
+      <label class="range-field">
+        <span>Rigueur climatique</span>
+        <input id="climateStress" type="range" min="0" max="1" step="0.05" value="0.45">
+      </label>
+
+      <section class="metric-grid" id="metrics" aria-label="Mesures de population"></section>
+
+      <section class="notes">
+        <h2>Modele</h2>
+        <p>Chaque animal possede un petit reseau neuronal herite et mute. Ses sorties pilotent direction, vitesse, prudence et preference alimentaire.</p>
+        <p>La selection vient seulement du monde: energie, nourriture, predateurs, climat, reproduction et mortalite.</p>
+      </section>
+    </aside>
+  </main>
+
+  <script src="src/simulation.js"></script>
+</body>
+</html>
