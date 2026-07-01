@@ -367,6 +367,7 @@ function registerAnimalRecord(animal) {
     deathDay: existing?.deathDay ?? null,
     alive: animal.alive,
     traits: { ...animal.defenseTraits },
+    brain: snapshotBrain(animal.brain),
   };
   world.genealogyRecords.set(animal.id, record);
 
@@ -387,6 +388,20 @@ function markAnimalDead(animal) {
   if (!record) return;
   record.alive = false;
   record.deathDay = world.day;
+  record.traits = { ...animal.defenseTraits };
+  record.brain = snapshotBrain(animal.brain);
+}
+
+function snapshotBrain(brain) {
+  return {
+    inputCount: brain.inputCount,
+    hiddenCount: brain.hiddenCount,
+    outputCount: brain.outputCount,
+    weights: brain.weights.slice(),
+    lastInputs: brain.lastInputs.slice(),
+    lastHidden: brain.lastHidden.slice(),
+    lastOutputs: brain.lastOutputs.slice(),
+  };
 }
 
 function getAnimalRecord(id) {
@@ -973,14 +988,11 @@ function traitPercent(value) {
 
 function renderGenealogyTree(record) {
   const ancestors = getAncestorPath(record);
-  const children = record.childrenIds
-    .map((id) => getAnimalRecord(id))
-    .filter(Boolean)
-    .sort((a, b) => a.generation - b.generation || a.id - b.id);
+  const descendants = getDescendantRecords(record);
 
   const ancestorRows = ancestors.map((entry) => genealogyButton(entry, entry.id === record.id ? 'current' : 'ancestor')).join('');
-  const childRows = children.length
-    ? children.map((entry) => genealogyButton(entry, 'child')).join('')
+  const childRows = descendants.length
+    ? descendants.map(({ entry, depth }) => genealogyButton(entry, 'child', depth)).join('')
     : '<div class="genealogy-empty">Aucun descendant connu pour le moment.</div>';
 
   return `
@@ -989,19 +1001,34 @@ function renderGenealogyTree(record) {
       ${ancestorRows}
     </div>
     <div class="genealogy-section">
-      <span class="genealogy-heading">Descendants directs</span>
+      <span class="genealogy-heading">Descendance</span>
       ${childRows}
     </div>
   `;
 }
 
-function genealogyButton(record, role) {
+function getDescendantRecords(record, depth = 0, visited = new Set()) {
+  if (visited.has(record.id)) return [];
+  visited.add(record.id);
+  return record.childrenIds
+    .map((id) => getAnimalRecord(id))
+    .filter(Boolean)
+    .sort((a, b) => a.generation - b.generation || a.id - b.id)
+    .flatMap((child) => [
+      { entry: child, depth },
+      ...getDescendantRecords(child, depth + 1, visited),
+    ]);
+}
+
+function genealogyButton(record, role, depth = 0) {
   const color = animalProfiles[record.kind]?.color || '#eef7ef';
   const state = record.alive ? 'Vivant' : `Mort J${record.deathDay ?? '?'}`;
   const stateClass = record.alive ? 'alive' : 'dead';
   const active = role === 'current' ? ' active' : '';
+  const indent = Math.min(depth * 14, 42);
+  const depthStyle = role === 'child' ? ` style="margin-left: ${indent}px; width: calc(100% - ${indent}px)"` : '';
   return `
-    <button class="genealogy-node${active}" type="button" data-select-id="${record.id}">
+    <button class="genealogy-node${active}" type="button" data-select-id="${record.id}"${depthStyle}>
       <strong>G${record.generation}</strong>
       <span class="lineage-kind" style="color: ${color}">${record.kind} #${record.id}</span>
       <span class="genealogy-state ${stateClass}">${state}</span>
@@ -1013,12 +1040,13 @@ function genealogyButton(record, role) {
 function drawSelectedBrain() {
   resizeBrainCanvas();
   const animal = getSelectedAnimal();
-  const record = animal ? null : getSelectedRecord();
+  const record = getSelectedRecord();
   brainCtx.clearRect(0, 0, brainCanvas.width, brainCanvas.height);
   brainCtx.fillStyle = '#0a1211';
   brainCtx.fillRect(0, 0, brainCanvas.width, brainCanvas.height);
 
-  if (!animal) {
+  const brain = animal?.brain || record?.brain || null;
+  if (!brain) {
     brainCtx.fillStyle = 'rgba(238, 247, 239, 0.58)';
     brainCtx.font = '13px Segoe UI, sans-serif';
     brainCtx.textAlign = 'center';
@@ -1032,7 +1060,6 @@ function drawSelectedBrain() {
     return;
   }
 
-  const brain = animal.brain;
   const padding = 26;
   const columns = [
     buildNeuronColumn(brain.lastInputs, padding, inputLabels),
@@ -1041,7 +1068,14 @@ function drawSelectedBrain() {
   ];
 
   drawBrainConnections(brain, columns);
-  drawBrainNeurons(columns, animalProfiles[animal.kind].color);
+  drawBrainNeurons(columns, animalProfiles[record.kind].color);
+
+  if (!animal) {
+    brainCtx.fillStyle = 'rgba(238, 247, 239, 0.62)';
+    brainCtx.font = '11px Segoe UI, sans-serif';
+    brainCtx.textAlign = 'left';
+    brainCtx.fillText(`archive #${record.id}`, 10, 16);
+  }
 }
 
 function buildNeuronColumn(values, x, labels) {
@@ -1313,6 +1347,8 @@ lineageListEl.addEventListener('click', (event) => {
   const button = event.target.closest('[data-select-id]');
   if (!button) return;
   world.selectedAnimalId = Number(button.dataset.selectId);
+  updateSelectionPanel();
+  drawSelectedBrain();
 });
 speedInput.addEventListener('input', () => {
   syncSpeedControl();
