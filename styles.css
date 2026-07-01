@@ -343,8 +343,10 @@ input:focus-visible {
   width: 100%;
   min-height: 42px;
   padding: 7px 8px;
+  border: 1px solid transparent;
   text-align: left;
   background: rgba(0, 0, 0, 0.18);
+  cursor: pointer;
 }
 
 .genealogy-node:hover {
@@ -353,8 +355,9 @@ input:focus-visible {
 }
 
 .genealogy-node.active {
-  border-color: rgba(238, 247, 239, 0.42);
-  background: rgba(255, 255, 255, 0.075);
+  border-color: rgba(245, 240, 163, 0.72);
+  background: rgba(245, 240, 163, 0.12);
+  box-shadow: inset 3px 0 0 rgba(245, 240, 163, 0.86);
 }
 
 .genealogy-node small {

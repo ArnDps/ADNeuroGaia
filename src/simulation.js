@@ -978,6 +978,15 @@ function updateSelectionPanel() {
   lineageListEl.innerHTML = renderGenealogyTree(record);
 }
 
+function selectAnimalById(id) {
+  const record = getAnimalRecord(id);
+  if (!record) return false;
+  world.selectedAnimalId = record.id;
+  updateSelectionPanel();
+  drawSelectedBrain();
+  return true;
+}
+
 function selectedStat(label, value) {
   return `<article class="selected-stat"><span>${label}</span><strong>${value}</strong></article>`;
 }
@@ -1346,9 +1355,13 @@ canvas.addEventListener('click', (event) => {
 lineageListEl.addEventListener('click', (event) => {
   const button = event.target.closest('[data-select-id]');
   if (!button) return;
-  world.selectedAnimalId = Number(button.dataset.selectId);
-  updateSelectionPanel();
-  drawSelectedBrain();
+  selectAnimalById(Number(button.dataset.selectId));
+});
+lineageListEl.addEventListener('pointerdown', (event) => {
+  const button = event.target.closest('[data-select-id]');
+  if (!button) return;
+  event.preventDefault();
+  selectAnimalById(Number(button.dataset.selectId));
 });
 speedInput.addEventListener('input', () => {
   syncSpeedControl();
