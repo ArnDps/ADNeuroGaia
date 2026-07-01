@@ -288,8 +288,10 @@ class Animal {
     this.tryReproduce();
 
     const oldAgePressure = Math.max(0, this.age - 4500) * 0.00004;
-    if (this.energy <= 0 || Math.random() < oldAgePressure) {
-      this.die();
+    if (this.energy <= 0) {
+      this.die(true, 'faim / epuisement');
+    } else if (Math.random() < oldAgePressure) {
+      this.die(true, 'vieillesse');
     }
   }
 
@@ -311,7 +313,7 @@ class Animal {
         ? clamp(0.46 + this.defenseTraits.cannibalism * 0.28 - defense * 0.22, 0.12, 0.68)
         : clamp(0.84 - defense * 0.62, 0.12, 0.9);
       if (prey.alive && Math.random() < captureChance) {
-        prey.die(false);
+        prey.die(false, cannibalAttack ? `cannibalisme par #${this.id}` : `predation par #${this.id}`);
         this.energy += profile.meatNutrition * (cannibalAttack ? 0.78 : 1) + prey.energy * 0.18;
         this.lastMeal = 0;
         addParticle(this.x, this.y, profile.color);
@@ -381,9 +383,9 @@ class Animal {
     addParticle(child.x, child.y, sexual ? '#ffd1f0' : '#f5f0a3');
   }
 
-  die(feedSoil = true) {
+  die(feedSoil = true, reason = 'inconnue') {
     this.alive = false;
-    markAnimalDead(this);
+    markAnimalDead(this, reason);
     if (feedSoil && world.plants.length < 850) {
       spawnPlant(this.x + randomBetween(-8, 8), this.y + randomBetween(-8, 8), randomBetween(5, 15));
     }
@@ -409,6 +411,7 @@ function registerAnimalRecord(animal) {
     lastMutationShift: animal.lastMutationShift,
     birthDay: Math.floor(animal.birthTick / 28),
     deathDay: existing?.deathDay ?? null,
+    deathReason: existing?.deathReason ?? null,
     alive: animal.alive,
     traits: { ...animal.defenseTraits },
     brain: snapshotBrain(animal.brain),
@@ -427,11 +430,12 @@ function refreshAnimalRecord(animal) {
   registerAnimalRecord(animal);
 }
 
-function markAnimalDead(animal) {
+function markAnimalDead(animal, reason = 'inconnue') {
   const record = world.genealogyRecords.get(animal.id);
   if (!record) return;
   record.alive = false;
   record.deathDay = world.day;
+  record.deathReason = reason;
   record.traits = { ...animal.defenseTraits };
   record.brain = snapshotBrain(animal.brain);
 }
@@ -1055,6 +1059,7 @@ function updateSelectionPanel() {
 
   const traits = animal?.defenseTraits || record.traits;
   const status = animal ? 'vivant' : `mort J${record.deathDay ?? '?'}`;
+  const deathReason = animal ? '-' : record.deathReason || 'inconnue';
   selectedBadgeEl.textContent = `#${record.id} ${record.kind} - ${status}`;
   mutationBadgeEl.textContent = `${record.totalMutations} mutations`;
   lineageBadgeEl.textContent = `G${record.generation} | ${record.childrenIds.length} enfant(s)`;
@@ -1062,6 +1067,7 @@ function updateSelectionPanel() {
     selectedStat('Type', record.kind),
     selectedStat('Sexe', record.sex || '-'),
     selectedStat('Etat', status),
+    selectedStat('Cause mort', deathReason),
     selectedStat('Energie', animal ? Math.round(animal.energy) : '-'),
     selectedStat('Age', animal ? `${Math.floor((world.tick - animal.birthTick) / 28)} j` : `J${record.birthDay}-${record.deathDay ?? '?'}`),
     selectedStat('Parents', parentSummary(record)),
@@ -1134,12 +1140,13 @@ function genealogyButton(record, role, depth = 0) {
   const active = role === 'current' ? ' active' : '';
   const indent = Math.min(depth * 14, 42);
   const depthStyle = role === 'child' ? ` style="margin-left: ${indent}px; width: calc(100% - ${indent}px)"` : '';
+  const deathInfo = record.alive ? '' : ` | ${record.deathReason || 'cause inconnue'}`;
   return `
     <button class="genealogy-node${active}" type="button" data-select-id="${record.id}"${depthStyle}>
       <strong>G${record.generation}</strong>
       <span class="lineage-kind" style="color: ${color}">${record.kind} #${record.id}</span>
       <span class="genealogy-state ${stateClass}">${state}</span>
-      <small>+${record.mutationCount} mutation(s) | ${traitDeltaSummary(record)}</small>
+      <small>+${record.mutationCount} mutation(s) | ${traitDeltaSummary(record)}${deathInfo}</small>
     </button>
   `;
 }
