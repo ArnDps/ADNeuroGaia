@@ -134,6 +134,24 @@ class NeuralBrain {
     };
   }
 
+  static recombine(parentA, parentB, rate = 0.08, strength = 0.28) {
+    let mutationCount = 0;
+    let totalShift = 0;
+    const weights = parentA.weights.map((weight, index) => {
+      const inherited = Math.random() < 0.5 ? weight : parentB.weights[index] ?? weight;
+      if (Math.random() > rate) return inherited;
+      const nextWeight = clamp(inherited + gaussian() * strength, -2.8, 2.8);
+      mutationCount += 1;
+      totalShift += Math.abs(nextWeight - inherited);
+      return nextWeight;
+    });
+    return {
+      brain: new NeuralBrain(parentA.inputCount, parentA.hiddenCount, parentA.outputCount, weights),
+      mutationCount,
+      averageShift: mutationCount ? totalShift / mutationCount : 0,
+    };
+  }
+
   think(inputs) {
     this.lastInputs = inputs.slice();
     const hidden = [];
@@ -204,10 +222,13 @@ class Animal {
     this.energy = randomBetween(58, 118);
     this.age = 0;
     this.generation = generation;
+    this.sex = Math.random() < 0.5 ? 'F' : 'M';
     this.brain = brain || new NeuralBrain();
     this.defenseTraits = normalizeDefenseTraits(kind, defenseTraits);
     this.birthTick = world.tick;
     this.parentId = lineage.length ? lineage[lineage.length - 1].id : null;
+    this.secondaryParentId = null;
+    this.parentIds = this.parentId ? [this.parentId] : [];
     this.mutationCount = 0;
     this.totalMutations = lineage.length ? lineage[lineage.length - 1].totalMutations : 0;
     this.lastMutationShift = 0;
@@ -308,18 +329,35 @@ class Animal {
 
   tryReproduce() {
     if (this.reproductionCooldown > 0 || this.energy < this.reproductionEnergy || world.animals.length > 380) return;
-    const cost = this.energy * 0.42;
+    const mate = findReproductionMate(this);
+    const sexual = Boolean(mate);
+    const cost = this.energy * (sexual ? 0.32 : 0.42);
+    const mateCost = mate ? mate.energy * 0.24 : 0;
     this.energy -= cost;
+    if (mate) {
+      mate.energy -= mateCost;
+      mate.reproductionCooldown = randomBetween(420, 1040);
+    }
     this.reproductionCooldown = randomBetween(360, 980);
     const mutationRate = 0.055 + world.climateStress * 0.055 + Math.random() * 0.03;
-    const mutation = this.brain.cloneMutated(mutationRate, 0.22 + world.climateStress * 0.2);
-    const inheritedDefense = mutateDefenseTraits(this.kind, this.defenseTraits, mutationRate);
+    const mutationStrength = 0.22 + world.climateStress * 0.2;
+    const mutation = mate
+      ? NeuralBrain.recombine(this.brain, mate.brain, mutationRate, mutationStrength)
+      : this.brain.cloneMutated(mutationRate, mutationStrength);
+    const inheritedDefense = mate
+      ? recombineDefenseTraits(this.kind, this.defenseTraits, mate.defenseTraits, mutationRate)
+      : mutateDefenseTraits(this.kind, this.defenseTraits, mutationRate);
     const inheritedLineage = this.lineage.slice();
-    const child = new Animal(this.kind, wrapX(this.x + randomBetween(-14, 14)), wrapY(this.y + randomBetween(-14, 14)), mutation.brain, this.generation + 1, inheritedLineage, inheritedDefense.traits);
-    child.energy = cost * 0.8;
+    const birthX = mate ? midpointWrapped(this.x, mate.x, world.width) : this.x;
+    const birthY = mate ? midpointWrapped(this.y, mate.y, world.height) : this.y;
+    const childGeneration = mate ? Math.max(this.generation, mate.generation) + 1 : this.generation + 1;
+    const child = new Animal(this.kind, wrapX(birthX + randomBetween(-14, 14)), wrapY(birthY + randomBetween(-14, 14)), mutation.brain, childGeneration, inheritedLineage, inheritedDefense.traits);
+    child.energy = (cost + mateCost) * (sexual ? 0.72 : 0.8);
     child.parentId = this.id;
+    child.secondaryParentId = mate?.id || null;
+    child.parentIds = mate ? [this.id, mate.id] : [this.id];
     child.mutationCount = mutation.mutationCount + inheritedDefense.mutationCount;
-    child.totalMutations = this.totalMutations + child.mutationCount;
+    child.totalMutations = Math.max(this.totalMutations, mate?.totalMutations || 0) + child.mutationCount;
     child.lastMutationShift = mutation.averageShift;
 
     if (Math.random() < 0.025) {
@@ -340,7 +378,7 @@ class Animal {
       totalMutations: child.totalMutations,
     }).slice(-8);
     world.animals.push(child);
-    addParticle(this.x, this.y, '#f5f0a3');
+    addParticle(child.x, child.y, sexual ? '#ffd1f0' : '#f5f0a3');
   }
 
   die(feedSoil = true) {
@@ -354,11 +392,17 @@ class Animal {
 
 function registerAnimalRecord(animal) {
   const existing = world.genealogyRecords.get(animal.id);
+  const parentIds = animal.parentIds?.length
+    ? animal.parentIds.slice()
+    : [animal.parentId, animal.secondaryParentId].filter(Boolean);
   const record = {
     id: animal.id,
     kind: animal.kind,
     generation: animal.generation,
+    sex: animal.sex,
     parentId: animal.parentId,
+    parentIds,
+    secondaryParentId: animal.secondaryParentId || null,
     childrenIds: existing?.childrenIds || [],
     mutationCount: animal.mutationCount,
     totalMutations: animal.totalMutations,
@@ -371,8 +415,8 @@ function registerAnimalRecord(animal) {
   };
   world.genealogyRecords.set(animal.id, record);
 
-  if (record.parentId) {
-    const parent = world.genealogyRecords.get(record.parentId);
+  for (const parentId of record.parentIds) {
+    const parent = world.genealogyRecords.get(parentId);
     if (parent && !parent.childrenIds.includes(record.id)) {
       parent.childrenIds.push(record.id);
     }
@@ -437,6 +481,13 @@ function traitDeltaSummary(record) {
   return deltas.map((entry) => `${traitShortLabel(entry.key)} ${entry.delta >= 0 ? '+' : ''}${Math.round(entry.delta * 100)}%`).join(', ');
 }
 
+function parentSummary(record) {
+  const parentIds = record.parentIds?.length
+    ? record.parentIds
+    : [record.parentId, record.secondaryParentId].filter(Boolean);
+  return parentIds.length ? parentIds.map((id) => `#${id}`).join(' + ') : '-';
+}
+
 function traitShortLabel(key) {
   return {
     camouflage: 'cam',
@@ -478,6 +529,26 @@ function mutateDefenseTraits(kind, traits, rate) {
   return { traits: next, mutationCount };
 }
 
+function recombineDefenseTraits(kind, traitsA, traitsB, rate) {
+  const first = normalizeDefenseTraits(kind, traitsA);
+  const second = normalizeDefenseTraits(kind, traitsB);
+  const traits = {};
+  let mutationCount = 0;
+  for (const key of ['camouflage', 'armor', 'energyAbsorption', 'gregariousness', 'cannibalism']) {
+    const blended = (first[key] + second[key]) * 0.5 + randomBetween(-0.035, 0.035);
+    traits[key] = clamp(blended, 0, 1);
+  }
+
+  const mutableTraits = kind === 'carnivore' ? ['cannibalism'] : kind === 'herbivore' ? ['camouflage', 'armor', 'energyAbsorption', 'gregariousness'] : [];
+  for (const key of mutableTraits) {
+    if (Math.random() < rate * 2.4) {
+      traits[key] = clamp(traits[key] + gaussian() * 0.09, 0, 1);
+      mutationCount += 1;
+    }
+  }
+  return { traits: normalizeDefenseTraits(kind, traits), mutationCount };
+}
+
 function normalizeDefenseTraits(kind, traits = {}) {
   const base = createDefenseTraits(kind);
   return {
@@ -516,6 +587,32 @@ function herdDefenseBonus(animal) {
     if (torusDistance(animal.x, animal.y, other.x, other.y) < 70) allies += 1;
   }
   return clamp((allies / 7) * animal.defenseTraits.gregariousness, 0, 1);
+}
+
+function findReproductionMate(animal) {
+  let best = null;
+  let bestScore = -Infinity;
+  const searchRadius = 115;
+  for (const candidate of world.animals) {
+    if (candidate === animal || !candidate.alive) continue;
+    if (!canReproduceTogether(animal, candidate)) continue;
+    const d = torusDistance(animal.x, animal.y, candidate.x, candidate.y);
+    if (d > searchRadius) continue;
+    const energyMargin = candidate.energy - candidate.reproductionEnergy;
+    const score = energyMargin - d * 0.35 + randomBetween(-4, 4);
+    if (score > bestScore) {
+      best = candidate;
+      bestScore = score;
+    }
+  }
+  return best;
+}
+
+function canReproduceTogether(a, b) {
+  if (a.kind !== b.kind) return false;
+  if (a.sex === b.sex) return false;
+  if (b.reproductionCooldown > 0 || b.energy < b.reproductionEnergy * 0.9) return false;
+  return Math.abs(a.generation - b.generation) <= 2;
 }
 
 function perceive(animal) {
@@ -963,10 +1060,11 @@ function updateSelectionPanel() {
   lineageBadgeEl.textContent = `G${record.generation} | ${record.childrenIds.length} enfant(s)`;
   selectedStatsEl.innerHTML = [
     selectedStat('Type', record.kind),
+    selectedStat('Sexe', record.sex || '-'),
     selectedStat('Etat', status),
     selectedStat('Energie', animal ? Math.round(animal.energy) : '-'),
     selectedStat('Age', animal ? `${Math.floor((world.tick - animal.birthTick) / 28)} j` : `J${record.birthDay}-${record.deathDay ?? '?'}`),
-    selectedStat('Parent', record.parentId ? `#${record.parentId}` : '-'),
+    selectedStat('Parents', parentSummary(record)),
     selectedStat('Mutation', record.mutationCount),
     selectedStat('Delta traits', traitDeltaSummary(record)),
     selectedStat('Camouflage', traitPercent(traits.camouflage)),
@@ -1281,6 +1379,12 @@ function vectorTo(from, to) {
   if (Math.abs(dx) > world.width / 2) dx -= Math.sign(dx) * world.width;
   if (Math.abs(dy) > world.height / 2) dy -= Math.sign(dy) * world.height;
   return { dx, dy };
+}
+
+function midpointWrapped(a, b, size) {
+  let delta = b - a;
+  if (Math.abs(delta) > size / 2) delta -= Math.sign(delta) * size;
+  return (a + delta * 0.5 + size) % size;
 }
 
 function distance(a, b) {
